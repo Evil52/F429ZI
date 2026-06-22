@@ -1,0 +1,13 @@
+[package]
+name = "f429zi-logic"
+version = "0.1.0"
+edition = "2024"
+authors = ["Evil52"]
+
+# Pure logic: no Embassy, no hardware. Builds no_std for the embedded target and
+# std for the host (so `cargo test` runs the unit tests natively on the Mac).
+[dependencies]
+heapless = "0.9"
+
+[dev-dependencies]
+assert_matches = "1"

@@ -1,0 +1,88 @@
+[workspace]
+members = [".", "logic"]
+resolver = "2"
+
+[package]
+name = "f429zi"
+version = "0.1.0"
+edition = "2024"
+authors = ["Evil52"]
+
+# ── Pure-logic crate (host-testable, no Embassy / no hardware) ───────────────
+# Lives in logic/. Compiled for BOTH the embedded target (no_std) and the host
+# (std) so its parsing / RTD math / state-machine code can be unit-tested with
+# `cargo test` on the Mac. Anything that touches a peripheral stays in src/.
+# (Pattern from the JZF407 reference + "Making Embedded Systems": isolate logic.)
+[dependencies]
+f429zi-logic = { path = "logic" }
+heapless = "0.9"
+
+# ── Embedded-target-only deps ───────────────────────────────────────────────
+# Gated on target_os = "none" so a native `cargo test` of the logic crate does
+# NOT try to build Embassy for the host.
+[target.'cfg(target_os = "none")'.dependencies]
+embassy-executor = { version = "0.10", features = [
+    "nightly",
+    "platform-cortex-m",
+    "executor-thread",
+] }
+embassy-stm32 = { version = "0.6", features = [
+    "stm32f429zi",
+    "unstable-pac",       # raw PAC access for bring-up fixes (RCC_AHB1LPENR etc.)
+    "time-driver-tim2",
+    "exti",
+    # NOTE: deliberately NO "memory-x" feature. That feature makes embassy-stm32
+    # emit its own memory.x; we ship our OWN memory.x (OTA A/B + CCM fault marker)
+    # via build.rs, so the two would collide. Keep memory-x OFF.
+] }
+# Static IPv4 + TCP only — no DHCP/UDP. Smaller smoltcp footprint.
+embassy-net = { version = "0.9", features = [
+    "tcp",
+    "medium-ethernet",
+    "proto-ipv4",
+] }
+# tick-hz-1_000_000 is MANDATORY at 168 MHz: TIM2 kernel clock = 84 MHz, so a
+# 1 MHz tick needs PSC=83 (fits u16). With tick-hz-1_000 PSC would be 83999 and
+# overflow the 16-bit prescaler → panic inside embassy_stm32::init() before RTT
+# is up (looks like a silent hang). TIM2 PSC is a 16-bit reg: RM0090 §17 (TIM2).
+embassy-time = { version = "0.5", features = ["tick-hz-1_000_000"] }
+embassy-sync = { version = "0.8" }
+embassy-futures = { version = "0.1" }
+
+smoltcp = { version = "0.11", default-features = false, features = [
+    "socket-tcp",
+    "medium-ethernet",
+    "proto-ipv4",
+] }
+
+embedded-hal = "1.0"
+embedded-hal-async = "1.0"
+embedded-io-async = "0.7"
+
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7"
+
+defmt = "1.1"
+# disable-blocking-mode: in blocking mode defmt waits for a host to drain the RTT
+# buffer; with NO debugger attached the buffer fills and the firmware hangs on
+# the first log. Non-blocking drops logs instead of hanging. (JZF407 bring-up note #1.)
+defmt-rtt = { version = "1.2", features = ["disable-blocking-mode"] }
+panic-probe = { version = "1.0", features = ["print-defmt"] }
+
+static_cell = "2"
+libm = "0.2"   # sqrtf for the MAX31865 Callendar-Van Dusen inversion (no FPU sqrt in core)
+
+[[bin]]
+name = "f429zi"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+debug = 2            # defmt needs debug symbols
+overflow-checks = false
+
+[profile.dev]
+opt-level = 1
+debug = 2
