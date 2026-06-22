@@ -87,14 +87,14 @@ async fn main(spawner: Spawner) {
     //   on, move the sensor to SPI4 (PE2/PE5/PE6). See board.rs "PA7 CONFLICT".
     let mut spi_config = SpiConfig::default();
     spi_config.mode = Mode {
-        polarity: Polarity::IdleLow,            // CPOL=0  } MAX31865
+        polarity: Polarity::IdleLow,             // CPOL=0  } MAX31865
         phase: Phase::CaptureOnSecondTransition, // CPHA=1  } SPI Mode 1
     };
     spi_config.frequency = Hertz(1_000_000); // 1 MHz — conservative start (max 5 MHz)
     let spi = Spi::new(
-        p.SPI1, p.PA5,  // SCK
-        p.PA7,  // MOSI (= MAX31865 SDI)
-        p.PA6,  // MISO (= MAX31865 SDO)
+        p.SPI1, p.PA5,      // SCK
+        p.PA7,      // MOSI (= MAX31865 SDI)
+        p.PA6,      // MISO (= MAX31865 SDO)
         p.DMA2_CH3, // SPI1_TX DMA  (RM0090 §10 request map)
         p.DMA2_CH2, // SPI1_RX DMA
         Irqs, spi_config,
