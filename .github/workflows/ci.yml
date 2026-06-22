@@ -1,0 +1,271 @@
+# =============================================================================
+# CI/CD pipeline — NUCLEO-F429ZI (STM32F429ZI, Cortex-M4F), Rust + Embassy.
+# =============================================================================
+# Port of the C/CMSIS GitLab pipeline to GitHub Actions. Same discipline:
+# every stage is a gate and uploads an artifact (incl. version.txt) for
+# traceability (IEC 62304). Standards context: IEC 62304 (medical), ISO 26262
+# (automotive), MISRA-C has no Rust equivalent — Rust gives memory-safety by
+# construction; we add cargo-audit/cargo-deny/cargo-geiger as the analyze gates.
+#
+# Stage map (C → Rust):
+#   format   clang-format        -> cargo fmt --check
+#   build    arm-gcc cross       -> cargo build --release (thumbv7em-none-eabihf)
+#   lint     clang-tidy          -> cargo clippy -D warnings
+#   analyze  cppcheck + MISRA    -> cargo deny + cargo geiger (unsafe audit)
+#   audit    (none in C)         -> cargo audit (RustSec CVE database)
+#   test     Unity host          -> cargo test -p f429zi-logic (host triple)
+#   coverage gcovr/cobertura     -> cargo llvm-cov --cobertura
+#   docs     doxygen             -> cargo doc
+#   hil      openocd + SWD       -> probe-rs flash + RTT boot-marker (self-hosted)
+#
+# Runners:
+#   docker/cloud stages -> ubuntu-latest (GitHub-hosted)
+#   hil                 -> self-hosted macOS runner with a Nucleo attached
+#                          (label set: [self-hosted, macOS]). HIL only on the
+#                          default branch; serialized via `concurrency` so two
+#                          pipelines never fight over the one board (= GitLab's
+#                          resource_group: hil).
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["*"]
+  pull_request:
+    branches: [main, master]
+
+# Cancel an in-progress run for the same ref when a new commit is pushed.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Target triple of the firmware (matches .cargo/config.toml / rust-toolchain.toml).
+  FW_TARGET: thumbv7em-none-eabihf
+  # Executable name from Cargo.toml [[bin]] name.
+  FW_NAME: f429zi
+  # probe-rs chip id for HIL.
+  CHIP: STM32F429ZITx
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1) FORMAT — rustfmt gate. Artifact: the diff if it fails.
+  # ---------------------------------------------------------------------------
+  format:
+    name: format (cargo fmt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt
+      - name: version stamp
+        run: bash ci/version.sh > version.txt && cat version.txt
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: version-format
+          path: version.txt
+
+  # ---------------------------------------------------------------------------
+  # 2) BUILD — cross-compile the firmware. Artifact: elf/bin + version.txt.
+  # ---------------------------------------------------------------------------
+  build:
+    name: build (firmware)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history + tags for version.sh `git describe`
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: thumbv7em-none-eabihf
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - name: version stamp
+        run: bash ci/version.sh > version.txt && cat version.txt
+      - name: cargo build --release
+        run: cargo build --release --target ${{ env.FW_TARGET }}
+      - name: produce .bin (flat binary for OTA / dfu)
+        run: |
+          # cargo-binutils gives `cargo objcopy` backed by the llvm-tools we just
+          # added — no fragile path hunting for llvm-objcopy.
+          cargo install cargo-binutils --locked
+          cargo objcopy --release --target ${{ env.FW_TARGET }} -- -O binary \
+            "target/${FW_TARGET}/release/${FW_NAME}.bin"
+          ls -la "target/${FW_TARGET}/release/${FW_NAME}" \
+                 "target/${FW_TARGET}/release/${FW_NAME}.bin"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: |
+            target/${{ env.FW_TARGET }}/release/${{ env.FW_NAME }}
+            target/${{ env.FW_TARGET }}/release/${{ env.FW_NAME }}.bin
+            version.txt
+
+  # ---------------------------------------------------------------------------
+  # 3) LINT — clippy as static analysis L1. -D warnings makes it a gate.
+  # ---------------------------------------------------------------------------
+  clippy:
+    name: lint (clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: thumbv7em-none-eabihf
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: clippy (firmware)
+        run: cargo clippy --target ${{ env.FW_TARGET }} -- -D warnings
+      - name: clippy (logic, host)
+        run: cargo clippy -p f429zi-logic -- -D warnings
+
+  # ---------------------------------------------------------------------------
+  # 4) ANALYZE — supply-chain + unsafe audit (Rust analog of cppcheck/MISRA).
+  # ---------------------------------------------------------------------------
+  analyze:
+    name: analyze (deny + geiger)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+      - name: install tools
+        run: |
+          cargo install cargo-deny --locked
+          cargo install cargo-geiger --locked || echo "geiger optional"
+      - name: cargo deny (licenses / CVE / sources) — GATE
+        run: cargo deny check
+      - name: cargo geiger (unsafe usage report) — informational
+        run: cargo geiger --target ${{ env.FW_TARGET }} 2>&1 | tee geiger-report.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: analyze
+          path: geiger-report.txt
+
+  # ---------------------------------------------------------------------------
+  # 5) AUDIT — RustSec CVE database. No C equivalent. Hard gate.
+  # ---------------------------------------------------------------------------
+  audit:
+    name: audit (cargo audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: cargo audit
+        run: cargo audit
+
+  # ---------------------------------------------------------------------------
+  # 6) TEST — host unit tests of the pure-logic crate (no hardware).
+  # ---------------------------------------------------------------------------
+  test:
+    name: test (logic, host)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - name: version stamp
+        run: bash ci/version.sh > version.txt
+      - name: cargo test (logic on host triple)
+        # The repo's .cargo/config forces the embedded triple; override with the
+        # runner's host triple so the test harness links.
+        run: |
+          HOST="$(rustc -vV | awk '/^host/{print $2}')"
+          cargo test -p f429zi-logic --target "$HOST"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: version-test
+          path: version.txt
+
+  # ---------------------------------------------------------------------------
+  # 7) COVERAGE — line coverage of the logic crate (cobertura for GitHub).
+  # ---------------------------------------------------------------------------
+  coverage:
+    name: coverage (llvm-cov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@v2
+      - name: install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+      - name: coverage (logic, host triple)
+        run: |
+          HOST="$(rustc -vV | awk '/^host/{print $2}')"
+          cargo llvm-cov -p f429zi-logic --target "$HOST" \
+            --cobertura --output-path coverage.xml --summary-only
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage.xml
+
+  # ---------------------------------------------------------------------------
+  # 8) DOCS — API docs from the code (doxygen analog).
+  # ---------------------------------------------------------------------------
+  docs:
+    name: docs (cargo doc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: thumbv7em-none-eabihf
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo doc
+        run: cargo doc --no-deps --target ${{ env.FW_TARGET }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docs
+          path: target/${{ env.FW_TARGET }}/doc
+
+  # ---------------------------------------------------------------------------
+  # 9) HIL — flash the real board + verify boot over RTT. Self-hosted (Mac).
+  # ---------------------------------------------------------------------------
+  hil:
+    name: hil (flash + RTT smoke)
+    needs: build                       # reuse the artifact, don't rebuild
+    # Target the runner that has the Nucleo attached by its full label set.
+    # The runner was registered as: self-hosted, macOS, ARM64, HIL. We require
+    # the custom HIL label so this job ONLY ever lands on the board machine,
+    # never on some other self-hosted macOS runner added later.
+    runs-on: [self-hosted, macOS, ARM64, HIL]
+    # One board → serialize. cancel-in-progress:false so a running flash isn't
+    # interrupted mid-write (= GitLab resource_group: hil).
+    concurrency:
+      group: hil-hardware
+      cancel-in-progress: false
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    steps:
+      - uses: actions/checkout@v4
+      - name: download firmware artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware
+          path: fw
+      - name: probe-rs present?
+        run: probe-rs --version
+      - name: HIL smoke test (flash + boot marker over RTT)
+        run: |
+          chmod +x ci/hil_smoke_test.sh
+          CHIP="${CHIP}" ci/hil_smoke_test.sh "fw/target/${FW_TARGET}/release/${FW_NAME}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hil
+          path: fw/version.txt
