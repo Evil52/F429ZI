@@ -240,7 +240,11 @@ jobs:
   hil:
     name: hil (flash + RTT smoke)
     needs: build                       # reuse the artifact, don't rebuild
-    runs-on: [self-hosted, macOS]      # the runner with the Nucleo attached
+    # Target the runner that has the Nucleo attached by its full label set.
+    # The runner was registered as: self-hosted, macOS, ARM64, HIL. We require
+    # the custom HIL label so this job ONLY ever lands on the board machine,
+    # never on some other self-hosted macOS runner added later.
+    runs-on: [self-hosted, macOS, ARM64, HIL]
     # One board → serialize. cancel-in-progress:false so a running flash isn't
     # interrupted mid-write (= GitLab resource_group: hil).
     concurrency:
