@@ -1,4 +1,4 @@
-# F429ZI — Rust + Embassy commercial firmware
+# F429ZI — Rust Embassy async HAL
 
 Industrial-style firmware for the **NUCLEO-F429ZI** (STM32F429ZIT6 + LAN8742A
 Ethernet PHY), built on the [Embassy](https://embassy.dev) async runtime. PT100
