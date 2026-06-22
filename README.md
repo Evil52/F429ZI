@@ -14,8 +14,10 @@ logic is split out into a host-tested `logic/` crate; hardware I/O lives in `src
 > module by module, to understand every line.
 
 Every hardware-specific value in the code carries a citation to its source:
-`UM1974 Rev 11, Table 11, p.29` (board) or `RM0090 §7.3.15, p.251` (MCU). All docs
-are local in [`docs/`](docs/).
+`UM1974 Rev 11, Table 11, p.29` (board) or `RM0090 §7.3.15, p.251` (MCU). The
+referenced PDFs live in a local `docs/` folder that is **git-ignored** (not
+committed — ~99 MB). Obtain them from st.com: RM0090 (dm00031020), PM0214,
+UM1974 (Nucleo-144 MB1137), plus the F429 datasheet.
 
 ---
 
@@ -95,7 +97,7 @@ F429ZI/
 ├── build.rs            puts memory.x on the linker search path
 ├── .cargo/config.toml  target + probe-rs runner via flash.sh
 ├── flash.sh            CubeIDE-style Flash/RAM size report + flash
-├── docs/               local datasheets (RM0090, PM0214, UM1974, the book)
+├── docs/               local datasheets (git-ignored — fetch from st.com)
 ├── src/                firmware (no_std)
 │   ├── main.rs         init + bring-up fixes + task spawning
 │   ├── board.rs        authoritative pin map with citations

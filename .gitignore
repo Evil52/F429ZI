@@ -1,1 +1,6 @@
 /target
+
+# Datasheets / reference PDFs — kept locally for development (we cite them in
+# code comments), but NOT committed: ~99 MB would bloat the repo and slow every
+# CI checkout. See README for where to obtain them (RM0090, PM0214, UM1974, etc.).
+/docs/
