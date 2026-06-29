@@ -15,13 +15,14 @@
 
 use core::sync::atomic::{AtomicI32, Ordering};
 
-use defmt::info;
+use defmt::{info, warn};
 use embassy_stm32::{
     gpio::Output,
     mode::Async,
     spi::{Spi, mode::Master},
 };
 use embassy_time::{Duration, Timer};
+use f429zi_logic::rtd;
 
 // ── MAX31865 register addresses (datasheet, Table "Register Memory Map") ──────
 const REG_CONFIG: u8 = 0x00;
@@ -68,11 +69,9 @@ impl<'d> Max31865<'d> {
     }
 
     /// Configure for 2-wire PT100, VBIAS on, auto-conversion, faults cleared.
-    /// (CONFIG_1SHOT / CONFIG_3WIRE / REG_RTD_MSB / REG_FAULT are referenced once
-    /// here just so the skeleton has no "unused const" warnings — wire them into
-    /// the real read path when you implement read_temperature.)
+    /// (CONFIG_1SHOT / CONFIG_3WIRE are unused: we run continuous-auto, 2-wire.)
     pub async fn init(&mut self) {
-        let _reserved = (CONFIG_1SHOT, CONFIG_3WIRE, REG_RTD_MSB, REG_FAULT);
+        let _reserved = (CONFIG_1SHOT, CONFIG_3WIRE);
         let cfg = CONFIG_VBIAS | CONFIG_AUTO | CONFIG_FAULT_CLR; // 2-wire: CONFIG_3WIRE=0
         self.write_reg(REG_CONFIG, cfg).await;
         info!("MAX31865 init: config=0x{:02x}", cfg);
@@ -80,26 +79,45 @@ impl<'d> Max31865<'d> {
 
     /// One temperature reading. Reads the 16-bit RTD register, strips the fault
     /// bit, converts via the host-tested rtd math, and publishes the result.
-    /// TODO: read REG_RTD_MSB+LSB (2 bytes) -> combine to u16. If bit0 set it is a
-    /// fault: read REG_FAULT, warn, clear it. Else raw15 = combined >> 1; then
-    /// r = rtd::raw_to_resistance(raw15); t = rtd::resistance_to_celsius(r);
-    /// publish_temp(t).
     pub async fn read_temperature(&mut self) {
-        todo!("see doc comment above: read RTD register, convert via logic::rtd, publish_temp")
+        // RTD result is MSB then LSB; LSB bit0 is the fault flag (datasheet).
+        let mut rtd = [0u8; 2];
+        self.read_regs(REG_RTD_MSB, &mut rtd).await;
+        let combined = ((rtd[0] as u16) << 8) | rtd[1] as u16;
+
+        if combined & 0x0001 != 0 {
+            // Fault bit set: read the fault register, log it, then clear faults.
+            let mut fault = [0u8; 1];
+            self.read_regs(REG_FAULT, &mut fault).await;
+            warn!("MAX31865 fault: 0x{:02x}", fault[0]);
+            // Re-write config with the fault-clear bit to reset the fault status.
+            let cfg = CONFIG_VBIAS | CONFIG_AUTO | CONFIG_FAULT_CLR;
+            self.write_reg(REG_CONFIG, cfg).await;
+            return;
+        }
+
+        let raw15 = combined >> 1; // drop the fault bit → 15-bit ratio
+        let r = rtd::raw_to_resistance(raw15);
+        let t = rtd::resistance_to_celsius(r);
+        publish_temp(t);
+        info!("RTD raw={} R={=f32} t={=f32}°C", raw15, r, t);
     }
 
     /// Write one register: CS low, send (0x80 | reg) then value, CS high.
-    /// TODO: self.cs.set_low(); spi.write(&[0x80|reg, val]).await; self.cs.set_high().
     async fn write_reg(&mut self, reg: u8, val: u8) {
-        let _ = (reg, val);
-        todo!("assert CS low, write [0x80|reg, val], CS high")
+        self.cs.set_low();
+        let _ = self.spi.write(&[0x80 | reg, val]).await;
+        self.cs.set_high();
     }
 
-    /// Read bytes starting at `reg`: CS low, send reg, clock out into buf, CS high.
-    /// TODO: use spi.transfer / transfer_in_place for the read phase.
+    /// Read `buf.len()` bytes starting at `reg`: CS low, send the (read) address,
+    /// clock the data out into `buf`, CS high. For a read the address MSB is 0, so
+    /// `reg` is sent as-is. MOSI state during the data phase is ignored by the chip.
     async fn read_regs(&mut self, reg: u8, buf: &mut [u8]) {
-        let _ = (reg, buf);
-        todo!("CS low, send reg, read buf, CS high")
+        self.cs.set_low();
+        let _ = self.spi.write(&[reg]).await; // address phase (read: MSB=0)
+        let _ = self.spi.read(buf).await; // data phase
+        self.cs.set_high();
     }
 }
 

@@ -12,7 +12,6 @@
 //!                    button is just the bench gesture for the Nucleo.
 
 use defmt::info;
-use embassy_futures::select::{select, Either};
 use embassy_stm32::{exti::ExtiInput, mode::Async};
 use embassy_time::{Duration, Timer};
 
@@ -32,29 +31,34 @@ pub async fn button_task(mut button: ExtiInput<'static, Async>) {
             continue; // bounce / spurious edge, ignore
         }
 
-        // Race "still held for DFU_HOLD" against "released". If the hold timer wins
-        // while the line is still high, it's a long press → enter DFU.
-        match select(Timer::after(DFU_HOLD), button.wait_for_falling_edge()).await {
-            Either::First(()) => {
-                // Held long enough. Confirm it's genuinely still down, then reboot
-                // into the ROM DFU bootloader. reboot_to_dfu() does not return.
-                if button.is_high() {
-                    info!("USER held {}s -> reboot into USB DFU", DFU_HOLD.as_secs());
-                    dfu::reboot_to_dfu();
-                }
-                // (Released right at the boundary — fall through to wait again.)
+        // Race: DFU_HOLD timer vs button release.
+        // We use with_timeout so we don't miss a falling edge that happened during
+        // the press-debounce window — if the button is already low when
+        // wait_for_falling_edge() is called it would block forever.
+        use embassy_time::with_timeout;
+        if button.is_low() {
+            // Already released during debounce — treat as short press.
+        } else if with_timeout(DFU_HOLD, button.wait_for_falling_edge())
+            .await
+            .is_err()
+        {
+            // Timeout fired while still held → long press → DFU.
+            if button.is_high() {
+                info!("USER held {}s -> reboot into USB DFU", DFU_HOLD.as_secs());
+                dfu::reboot_to_dfu();
             }
-            Either::Second(()) => {
-                // Short press: released before the hold threshold → cycle LEDs.
-                Timer::after(Duration::from_millis(50)).await; // debounce release
-                let new_state = STATE.lock(|s| {
-                    let next = s.get().next();
-                    s.set(next);
-                    next
-                });
-                info!("Button -> {}", new_state);
-                CHANGED.signal(());
-            }
+            // Released right at boundary — fall through to short-press handling.
+            button.wait_for_falling_edge().await;
         }
+
+        // Short press (or boundary release): cycle LEDs.
+        Timer::after(Duration::from_millis(50)).await; // debounce release
+        let new_state = STATE.lock(|s| {
+            let next = s.get().next();
+            s.set(next);
+            next
+        });
+        info!("Button -> {}", new_state);
+        CHANGED.signal(());
     }
 }

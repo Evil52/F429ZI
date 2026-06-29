@@ -8,6 +8,9 @@ authors = ["Evil52"]
 # std for the host (so `cargo test` runs the unit tests natively on the Mac).
 [dependencies]
 heapless = "0.9"
+# Portable libm so the RTD math's sqrt works in BOTH no_std (target) and the
+# host test build, without pulling in std (f32::sqrt is std-only).
+libm = "0.2"
 
 [dev-dependencies]
 assert_matches = "1"

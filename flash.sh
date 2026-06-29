@@ -18,4 +18,22 @@ END {
 echo "===================="
 echo ""
 
-probe-rs run --chip STM32F429ZITx "$ELF"
+# Flash and RELEASE the board so it runs standalone — no USB re-plug needed.
+#
+# `probe-rs run` flashes but keeps the core under the debugger (halted in the
+# debug domain, RTT held open). On exit the core is left suspended, so the app
+# only really starts after a power-on reset (unplug/replug USB). For a "flash and
+# go" workflow we instead download, then issue a reset that lets the core run on
+# its own and detach.
+#
+# For live defmt logs during development use `probe-rs run --chip STM32F429ZITx
+# "$ELF"` directly, or `cargo embed`.
+CHIP="STM32F429ZITx"
+
+echo "=== Flashing ==="
+probe-rs download --chip "$CHIP" "$ELF"
+
+echo "=== Reset (run standalone) ==="
+probe-rs reset --chip "$CHIP"
+
+echo "Done — board is running. No USB re-plug needed."

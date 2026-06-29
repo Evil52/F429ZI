@@ -30,7 +30,7 @@ pub const CVD_B: f32 = -5.775e-7;
 /// `raw15` here. resistance = raw15 / 32768 * Rref.
 pub fn raw_to_resistance(raw15: u16) -> f32 {
     // raw15 is already the 15-bit ratio numerator (fault bit removed).
-    todo!("resistance = (raw15 as f32 / 32768.0) * RREF")
+    (raw15 as f32 / 32768.0) * RREF
 }
 
 /// Convert RTD resistance (ohms) to temperature in °C using the inverted
@@ -39,11 +39,13 @@ pub fn raw_to_resistance(raw15: u16) -> f32 {
 ///
 /// Closed form: t = (-A + sqrt(A^2 - 4B(1 - R/R0))) / (2B)
 ///
-/// `sqrtf` comes from the `libm` crate in the firmware; the host test can use
-/// `f32::sqrt`. Keep the sqrt call behind the caller so this crate stays
-/// dependency-light, OR add libm here too — decide when you write it.
+/// We use `libm::sqrtf` so the same code path works on both the host and the
+/// `no_std` target (`f32::sqrt` is a std-only method, unavailable in no_std).
 pub fn resistance_to_celsius(r_ohms: f32) -> f32 {
-    todo!("invert R(t) = R0*(1 + A*t + B*t^2) for t; use sqrt")
+    // Invert R(t) = R0*(1 + A*t + B*t^2) for the t >= 0 °C branch.
+    // 0 = B*t^2 + A*t + (1 - R/R0)  →  quadratic in t.
+    let discriminant = CVD_A * CVD_A - 4.0 * CVD_B * (1.0 - r_ohms / R0);
+    (-CVD_A + libm::sqrtf(discriminant)) / (2.0 * CVD_B)
 }
 
 #[cfg(test)]

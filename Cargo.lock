@@ -601,6 +601,7 @@ version = "0.1.0"
 dependencies = [
  "assert_matches",
  "heapless 0.9.3",
+ "libm",
 ]
 
 [[package]]
