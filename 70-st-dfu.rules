@@ -1,0 +1,20 @@
+# udev rules so a normal user can flash this board over USB without sudo.
+# The existing 69-probe-rs.rules only covers CMSIS-DAP (0d28:0204); the Nucleo's
+# on-board ST-Link and the STM32 ROM DFU bootloader have different USB IDs and
+# need their own rules. Without these, /dev/bus/usb/... stays root-only and
+# probe-rs / dfu-util fail with "errno 13" (Permission denied).
+#
+# Install:
+#   sudo cp 70-st-dfu.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger
+#   then UNPLUG and REPLUG the USB cable (rules apply on the next enumerate).
+
+# ST-LINK/V2.1 (on-board debugger, mini-USB CN1) — used by probe-rs.
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="374b", MODE="0666", GROUP="plugdev", TAG+="uaccess"
+
+# ST-LINK/V2 (older) — harmless to include.
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="3748", MODE="0666", GROUP="plugdev", TAG+="uaccess"
+
+# STM32 system ROM DFU bootloader (micro-USB CN13 / OTG FS) — used by dfu-util.
+SUBSYSTEM=="usb", ATTR{idVendor}=="0483", ATTR{idProduct}=="df11", MODE="0666", GROUP="plugdev", TAG+="uaccess"

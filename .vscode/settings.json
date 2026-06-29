@@ -22,5 +22,8 @@
             "command": "extension.execute",
             "priority": 4
         }
+    ],
+    "python.autoComplete.extraPaths": [
+        "/home/user/.vscode-server/extensions/rt-thread.rt-thread-micropython-1.0.11/microExamples/code-completion"
     ]
 }

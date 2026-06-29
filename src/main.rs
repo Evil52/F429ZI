@@ -7,6 +7,7 @@ mod board; // pin map + datasheet citations (documentation module)
 mod buttons; // B1 USER → LED state machine
 mod clock; // 168 MHz RCC config + firmware-size helpers
 mod config; // Flash-backed network config (load/save)
+mod dfu; // jump into ROM USB-DFU bootloader (field re-flash, no ST-Link)
 mod fault; // reset-reason + safe_reboot
 mod leds; // 3-LED state machine task
 mod net; // embassy-net runner (Ethernet)
@@ -46,6 +47,14 @@ bind_interrupts!(struct Irqs {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    // ── FIRST THING: ROM USB-DFU entry check ─────────────────────────────────
+    // If the previous boot called dfu::reboot_to_dfu() (e.g. a long USER-button
+    // hold), this jumps into the chip's ROM DFU loader NOW — before any clock or
+    // peripheral init — so the board re-enumerates as "STM32 BOOTLOADER" and
+    // ./dfu.sh can re-flash it over USB. Returns immediately on a normal boot.
+    // MUST stay before embassy_stm32::init(). See src/dfu.rs.
+    dfu::check_and_enter_dfu();
+
     // 168 MHz from 8 MHz ST-LINK MCO HSE — see clock.rs (UM1974 §7.8.1, p.26).
     let p = embassy_stm32::init(clock::make_config());
 
