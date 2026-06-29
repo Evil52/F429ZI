@@ -1,0 +1,25 @@
+# cargo-embed configuration. Used by `cargo embed` for flashing + live defmt
+# logs over RTT. (Plain `cargo run` does NOT use this — it runs flash.sh.)
+#
+# Without this file cargo-embed can't auto-detect the chip and fails with
+# "The connected chip could not automatically be determined."
+
+[default.general]
+# STM32F429ZIT6 on the Nucleo-144. Same chip id flash.sh passes to probe-rs.
+chip = "STM32F429ZITx"
+
+[default.flashing]
+enabled = true
+
+[default.reset]
+enabled = true
+# Halt after reset = false → let the app run on its own once flashed.
+halt_afterwards = false
+
+[default.rtt]
+# RTT carries the defmt logs (defmt_rtt in the firmware). Show them live.
+enabled = true
+
+[default.gdb]
+# No GDB server by default; use `probe-rs` / gdb-multiarch separately if needed.
+enabled = false
