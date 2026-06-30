@@ -23,6 +23,20 @@ pub const CVD_A: f32 = 3.9083e-3;
 /// IEC 60751 Callendar–Van Dusen coefficient B.
 pub const CVD_B: f32 = -5.775e-7;
 
+// sqrt source: core has no f32::sqrt on bare-metal, so on the MCU we use
+// libm::sqrtf; on the host the std build has f32::sqrt. One `sqrt()` either way.
+#[cfg(target_os = "none")]
+#[inline]
+fn sqrt(x: f32) -> f32 {
+    libm::sqrtf(x)
+}
+
+#[cfg(not(target_os = "none"))]
+#[inline]
+fn sqrt(x: f32) -> f32 {
+    x.sqrt()
+}
+
 /// Convert the MAX31865 15-bit RTD register value into RTD resistance (ohms).
 ///
 /// The MAX31865 RTD result register (MSB+LSB) holds the ratio in bits [15:1];
@@ -30,7 +44,7 @@ pub const CVD_B: f32 = -5.775e-7;
 /// `raw15` here. resistance = raw15 / 32768 * Rref.
 pub fn raw_to_resistance(raw15: u16) -> f32 {
     // raw15 is already the 15-bit ratio numerator (fault bit removed).
-    todo!("resistance = (raw15 as f32 / 32768.0) * RREF")
+    (raw15 as f32) / 32768.0 * RREF
 }
 
 /// Convert RTD resistance (ohms) to temperature in °C using the inverted
@@ -43,7 +57,9 @@ pub fn raw_to_resistance(raw15: u16) -> f32 {
 /// `f32::sqrt`. Keep the sqrt call behind the caller so this crate stays
 /// dependency-light, OR add libm here too — decide when you write it.
 pub fn resistance_to_celsius(r_ohms: f32) -> f32 {
-    todo!("invert R(t) = R0*(1 + A*t + B*t^2) for t; use sqrt")
+    let c = 1.0 - r_ohms / R0;
+    let discriminant = CVD_A * CVD_A - 4.0 * CVD_B * c;
+    (-CVD_A + sqrt(discriminant)) / (2.0 * CVD_B)
 }
 
 #[cfg(test)]

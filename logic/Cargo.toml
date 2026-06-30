@@ -9,5 +9,11 @@ authors = ["Evil52"]
 [dependencies]
 heapless = "0.9"
 
+# sqrtf for the PT100 math (rtd.rs). Needed ONLY on the bare-metal target — core
+# has no f32::sqrt there. On the host the test build uses f32::sqrt (std), so we
+# gate libm on target_os = "none" to keep host tests dependency-light.
+[target.'cfg(target_os = "none")'.dependencies]
+libm = "0.2"
+
 [dev-dependencies]
 assert_matches = "1"
