@@ -3,12 +3,25 @@
 
 /// Parse "192.168.1.20" → [192,168,1,20]. Returns None on any malformed octet.
 pub fn parse_ipv4(s: &str) -> Option<[u8; 4]> {
-    todo!("split on '.', exactly 4 parts, each u8::from_str")
+    let mut octets = [0u8; 4];
+    let mut parts = s.split('.');
+    for slot in octets.iter_mut() {
+        let part = parts.next()?; // меньше 4 частей -> None
+        *slot = part.parse::<u8>().ok()?; // не число или >255  -> None
+    }
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(octets)
 }
 
 /// Parse a TCP/UDP port "1..=65535". Returns None on 0 or overflow.
 pub fn parse_port(s: &str) -> Option<u16> {
-    todo!("u16::from_str, reject 0")
+    let port = s.parse::<u16>().ok()?;
+    if port == 0 {
+        return None; // порт 0 невалиден
+    }
+    Some(port)
 }
 
 #[cfg(test)]
